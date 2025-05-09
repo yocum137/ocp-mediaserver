@@ -1,0 +1,87 @@
+#!/bin/bash
+
+export PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR="/var/lib/plexmediaserver/Library/Application Support"
+export PLEX_MEDIA_SERVER_HOME=/usr/lib/plexmediaserver
+export PLEX_MEDIA_SERVER_MAX_PLUGIN_PROCS=6
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+# Preinstall tasks
+
+# Add group 'plex' if not already present on system.
+if [ $(cat /etc/group | grep ^plex | wc -l) -eq 0 ]; then
+  groupadd plex
+fi
+
+# Add user 'plex' if not already present on system.
+if [ $(cat /etc/passwd | grep ^plex: | wc -l) -eq 0 ]; then
+  useradd -d /var/lib/plexmediaserver -c "RPM Created PlexUser" -g plex --system -s /sbin/nologin plex
+fi
+
+# Add user 'plex' to 'video' group if not added already.
+# Presume User and Group to be 'plex' and 'video'.
+PUSER=plex
+VGROUP=video
+NORUN=0
+
+# If the default group for video devices isn't 'video', switch to that group.
+if [ -f /dev/dri/renderD128 ]; then
+  if [ "$(stat --format=%G /dev/dri/renderD128)" != "root" ]; then
+    VGROUP="$(stat --format=%G /dev/dri/renderD128)"
+  else
+    NORUN=1
+  fi
+elif [ -f /dev/fb0 ]; then
+  if [ "$(stat --format=%G /dev/fb0)" != "root" ]; then
+    VGROUP="$(stat --format=%G /dev/fb0)"
+  else
+    NORUN=1
+  fi
+elif [ -f /dev/video0 ]; then
+  if [ "$(stat --format=%G /dev/video0)" != "root" ]; then
+    VGROUP="$(stat --format=%G /dev/video0)"
+  else
+    NORUN=1
+  fi
+fi
+
+if [ "${NORUN}" != "1" ]; then
+  if [ "$(getent group ${VGROUP}|grep -c ${VGROUP})" != "0" ]; then
+    if [ "$(groups ${PUSER}|grep -c ${VGROUP})" = "0" ]; then
+      usermod -a -G ${VGROUP} ${PUSER}
+    fi
+  fi
+fi
+
+# Install Plex
+
+dnf5 download plexmediaserver
+rpm -i --noscripts plexmediaserver*rpm
+
+# Postinstall tasks
+
+# Create default PMS library directory for user 'plex' if it doesn't exist.
+if [ ! -d /var/lib/plexmediaserver ]; then
+  mkdir /var/lib/plexmediaserver
+  chown plex:plex /var/lib/plexmediaserver
+fi
+
+# Add PMS SELinux policy file if SELinux is present and not disabled.
+if [[ -f /usr/sbin/getenforce && ! $(/usr/sbin/getenforce | grep -i Disabled) ]]; then
+    semodule -i /usr/lib/plexmediaserver/plexrsync.pp
+fi
+
+  # If udev is installed, check for tv butler rules file and create if needed.
+  if [[ -d /lib/udev/rules.d && ! -f /lib/udev/rules.d/60-tv-butler-perms.rules ]]; then
+    echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="1d19", ATTRS{idProduct}=="0100", GROUP="video", MODE="0664"' > /lib/udev/rules.d/60-tv-butler-perms.rules
+  fi
+
+# Run Plex
+
+/bin/sh -c '/usr/bin/test -d "${PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR}" || /bin/mkdir -p "${PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR}"'
+
+/bin/sh -c '\
+PLEX_MEDIA_SERVER_INFO_VENDOR="$(grep ^NAME= /etc/os-release | awk -F= "{print \\$2}" | tr -d \\" )" \
+PLEX_MEDIA_SERVER_INFO_MODEL="$(uname -m)" \
+PLEX_MEDIA_SERVER_INFO_PLATFORM_VERSION="$(grep ^VERSION= /etc/os-release | awk -F= "{print \\$2}" | tr -d \\" )" \
+"/usr/lib/plexmediaserver/Plex Media Server"'
