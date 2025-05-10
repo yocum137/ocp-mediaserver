@@ -15,6 +15,7 @@ RUN \
     && \
     \
     dnf clean all \
+    && \
     \
     # Add group 'plex' if not already present on system.
     if [ $(cat /etc/group | grep ^plex | wc -l) -eq 0 ]; then \
